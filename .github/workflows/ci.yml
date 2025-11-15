@@ -1,0 +1,342 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.21'
+
+jobs:
+  # 代码质量检查
+  lint:
+    name: Lint and Format Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Check formatting
+        run: |
+          if [ "$(gofmt -s -l . | wc -l)" -gt 0 ]; then
+            echo "Code is not formatted. Please run 'make fmt'"
+            gofmt -s -l .
+            exit 1
+          fi
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v1.54.2
+
+      - name: Run golangci-lint
+        run: golangci-lint run ./...
+
+  # 测试
+  test:
+    name: Test
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        go-version: ['1.21', '1.22']
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test -v -race -coverprofile=coverage.out ./...
+
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest' && matrix.go-version == '1.21'
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+
+  # 构建测试
+  build:
+    name: Build Test
+    needs: [lint, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build current platform
+        run: make build
+
+      - name: Test binary
+        run: |
+          ./build/gwt --version
+          ./build/gwt --help
+
+      - name: Build all platforms
+        run: make build-all
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: binaries
+          path: dist/
+          retention-days: 1
+
+  # 安全扫描
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run gosec security scanner
+        uses: securecodewarrior/github-action-gosec@master
+        with:
+          args: '-no-fail -fmt sarif -out results.sarif ./...'
+
+      - name: Upload SARIF file
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: results.sarif
+
+      - name: Run nancy vulnerability scanner
+        run: |
+          go list -json -m all | docker run --rm -i sonatypecommunity/nancy:latest sleuth
+
+  # 集成测试
+  integration-test:
+    name: Integration Tests
+    needs: [build]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v3
+        with:
+          name: binaries
+          path: dist/
+
+      - name: Setup test environment
+        run: |
+          # 创建测试 Git 仓库
+          git init test-repo
+          cd test-repo
+          git config user.name "Test User"
+          git config user.email "test@example.com"
+          
+          # 创建初始提交
+          echo "# Test Repository" > README.md
+          git add README.md
+          git commit -m "Initial commit"
+          
+          # 创建测试分支
+          git checkout -b feature/test
+          echo "Feature content" > feature.txt
+          git add feature.txt
+          git commit -m "Add feature"
+          
+          git checkout main
+          git checkout -b hotfix/test
+          echo "Hotfix content" > hotfix.txt
+          git add hotfix.txt
+          git commit -m "Add hotfix"
+          
+          git checkout main
+
+      - name: Run integration tests (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          cd test-repo
+          chmod +x ../dist/gwt-linux-amd64
+          ../dist/gwt-linux-amd64 list
+          ../dist/gwt-linux-amd64 create feature/test-worktree
+          ../dist/gwt-linux-amd64 list
+          ../dist/gwt-linux-amd64 remove feature/test-worktree
+
+      - name: Run integration tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd test-repo
+          ..\dist\gwt-windows-amd64.exe list
+          ..\dist\gwt-windows-amd64.exe create feature/test-worktree
+          ..\dist\gwt-windows-amd64.exe list
+          ..\dist\gwt-windows-amd64.exe remove feature/test-worktree
+
+  # 性能测试
+  performance:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Run benchmark tests
+        run: go test -bench=. -benchmem ./...
+
+      - name: Build with profiling
+        run: |
+          go build -o gwt-profile -gcflags="-cpuprofile=cpu.prof" .
+          ./gwt-profile list
+
+      - name: Upload profiling data
+        uses: actions/upload-artifact@v3
+        with:
+          name: profiling-data
+          path: |
+            cpu.prof
+            mem.prof
+          retention-days: 7
+
+  # 文档检查
+  docs:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check documentation
+        run: |
+          # 检查文档文件是否存在
+          required_docs=(
+            "README.md"
+            "CONTRIBUTING.md"
+            "DEVELOPMENT.md"
+            "docs/BUILD_GUIDE.md"
+            "docs/QUICK_START.md"
+          )
+          
+          for doc in "${required_docs[@]}"; do
+            if [ ! -f "$doc" ]; then
+              echo "❌ Missing documentation: $doc"
+              exit 1
+            else
+              echo "✅ Found: $doc"
+            fi
+          done
+
+      - name: Check for broken links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          use-verbose-mode: 'no'
+          check-modified-files-only: 'no'
+          folder-path: 'docs/'
+
+  # 打包和发布准备
+  package:
+    name: Package and Prepare Release
+    needs: [lint, test, build, security, integration-test]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Create distribution package
+        run: |
+          mkdir -p dist
+          find artifacts -name "*.zip" -o -name "*.tar.gz" | while read file; do
+            cp "$file" dist/
+          done
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > checksums.txt
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@v3
+        with:
+          name: distribution
+          path: dist/
+          retention-days: 7
+
+      - name: Create pre-release
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # 创建预发布版本（仅供测试）
+          echo "Pre-release package created successfully"
+          echo "Files in dist/:"
+          ls -la dist/

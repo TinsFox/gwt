@@ -1,0 +1,451 @@
+name: Repository Automation
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Action to perform'
+        required: true
+        type: choice
+        options:
+          - create-repo
+          - setup-repo
+          - sync-labels
+          - create-issue
+          - create-release
+          - cleanup-artifacts
+      repository:
+        description: 'Repository name (for create-repo action)'
+        required: false
+        type: string
+      issue_title:
+        description: 'Issue title (for create-issue action)'
+        required: false
+        type: string
+      issue_body:
+        description: 'Issue body (for create-issue action)'
+        required: false
+        type: string
+      release_version:
+        description: 'Release version (for create-release action)'
+        required: false
+        type: string
+
+env:
+  GO_VERSION: '1.21'
+
+jobs:
+  # 创建新的 GitHub 仓库
+  create-repo:
+    name: Create Repository
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'create-repo'
+    steps:
+      - name: Setup GitHub CLI
+        run: |
+          # 安装 GitHub CLI
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+          
+          # 验证安装
+          gh --version
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+          
+      - name: Create new repository
+        run: |
+          REPO_NAME="${{ github.event.inputs.repository }}"
+          if [ -z "$REPO_NAME" ]; then
+            REPO_NAME="gwt-$(date +%Y%m%d-%H%M%S)"
+          fi
+          
+          echo "Creating repository: $REPO_NAME"
+          
+          # 创建仓库
+          gh repo create "$REPO_NAME" \
+            --public \
+            --description "Git Worktree CLI - A powerful command-line tool for managing Git worktrees" \
+            --homepage "https://github.com/tinsfox/gwt" \
+            --template "tinsfox/gwt" \
+            --confirm
+          
+          echo "Repository created: https://github.com/${{ github.repository_owner }}/$REPO_NAME"
+          
+          # 克隆模板仓库
+          git clone https://github.com/tinsfox/gwt.git temp-repo
+          cd temp-repo
+          
+          # 更新远程地址
+          git remote set-url origin "https://github.com/${{ github.repository_owner }}/$REPO_NAME.git"
+          
+          # 推送到新仓库
+          git push -u origin main
+          
+          echo "Template code pushed to new repository"
+
+  # 设置仓库配置
+  setup-repo:
+    name: Setup Repository
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'setup-repo'
+    steps:
+      - name: Setup GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Configure repository settings
+        run: |
+          # 设置仓库选项
+          gh repo edit ${{ github.repository }} \
+            --enable-auto-merge \
+            --delete-branch-on-merge \
+            --enable-discussions \
+            --enable-projects \
+            --enable-wiki
+          
+          echo "Repository settings updated"
+
+      - name: Create branch protection rules
+        run: |
+          # 创建分支保护规则
+          gh api repos/${{ github.repository }}/branches/main/protection \
+            --method PUT \
+            --input - <<< '{
+              "required_status_checks": {
+                "strict": true,
+                "contexts": ["lint", "test", "build", "security"]
+              },
+              "enforce_admins": false,
+              "required_pull_request_reviews": {
+                "required_approving_review_count": 1,
+                "dismiss_stale_reviews": true,
+                "require_code_owner_reviews": true
+              },
+              "restrictions": null,
+              "allow_force_pushes": false,
+              "allow_deletions": false
+            }' || echo "Branch protection may already exist"
+
+      - name: Setup issue templates
+        run: |
+          # 创建 issue 模板目录
+          mkdir -p .github/ISSUE_TEMPLATE
+          
+          # Bug 报告模板
+          cat > .github/ISSUE_TEMPLATE/bug_report.md << 'EOF'
+          ---
+          name: Bug report
+          about: Create a report to help us improve
+          title: '[BUG] '
+          labels: bug
+          assignees: ''
+          ---
+          
+          **Describe the bug**
+          A clear and concise description of what the bug is.
+          
+          **To Reproduce**
+          Steps to reproduce the behavior:
+          1. Go to '...'
+          2. Click on '....'
+          3. Scroll down to '....'
+          4. See error
+          
+          **Expected behavior**
+          A clear and concise description of what you expected to happen.
+          
+          **Screenshots**
+          If applicable, add screenshots to help explain your problem.
+          
+          **Environment (please complete the following information):**
+          - OS: [e.g. Ubuntu 20.04]
+          - Go Version: [e.g. 1.21]
+          - Git Version: [e.g. 2.34]
+          - gwt Version: [e.g. 1.0.0]
+          
+          **Additional context**
+          Add any other context about the problem here.
+          EOF
+          
+          # 功能请求模板
+          cat > .github/ISSUE_TEMPLATE/feature_request.md << 'EOF'
+          ---
+          name: Feature request
+          about: Suggest an idea for this project
+          title: '[FEATURE] '
+          labels: enhancement
+          assignees: ''
+          ---
+          
+          **Is your feature request related to a problem? Please describe.**
+          A clear and concise description of what the problem is. Ex. I'm always frustrated when [...]
+          
+          **Describe the solution you'd like**
+          A clear and concise description of what you want to happen.
+          
+          **Describe alternatives you've considered**
+          A clear and concise description of any alternative solutions or features you've considered.
+          
+          **Additional context**
+          Add any other context or screenshots about the feature request here.
+          EOF
+          
+          # Pull Request 模板
+          cat > .github/pull_request_template.md << 'EOF'
+          ## Description
+          Please include a summary of the change and which issue is fixed. Please also include relevant motivation and context.
+          
+          Fixes # (issue)
+          
+          ## Type of change
+          
+          - [ ] Bug fix (non-breaking change which fixes an issue)
+          - [ ] New feature (non-breaking change which adds functionality)
+          - [ ] Breaking change (fix or feature that would cause existing functionality to not work as expected)
+          - [ ] Documentation update
+          - [ ] Performance improvement
+          - [ ] Code refactoring
+          
+          ## How Has This Been Tested?
+          
+          Please describe the tests that you ran to verify your changes. Provide instructions so we can reproduce.
+          
+          - [ ] Unit tests
+          - [ ] Integration tests
+          - [ ] Manual testing
+          
+          ## Checklist:
+          
+          - [ ] My code follows the style guidelines of this project
+          - [ ] I have performed a self-review of my own code
+          - [ ] I have commented my code, particularly in hard-to-understand areas
+          - [ ] I have made corresponding changes to the documentation
+          - [ ] My changes generate no new warnings
+          - [ ] I have added tests that prove my fix is effective or that my feature works
+          - [ ] New and existing unit tests pass locally with my changes
+          - [ ] Any dependent changes have been merged and published
+          EOF
+          
+          # 提交更改
+          git add .github/
+          git commit -m "chore: add issue and PR templates"
+          git push
+
+  # 同步标签
+  sync-labels:
+    name: Sync Labels
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'sync-labels'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Create standardized labels
+        run: |
+          # 定义标准标签
+          labels=(
+            "bug,#d73a4a,Something isn't working"
+            "enhancement,#a2eeef,New feature or request"
+            "documentation,#0075ca,Improvements or additions to documentation"
+            "good first issue,#7057ff,Good for newcomers"
+            "help wanted,#008672,Extra attention is needed"
+            "priority-high,#b60205,High priority"
+            "priority-medium,#fbca04,Medium priority"
+            "priority-low,#0e8a16,Low priority"
+            "question,#d876e3,Further information is requested"
+            "wontfix,#ffffff,This will not be worked on"
+            "invalid,#e4e669,This doesn't seem right"
+            "duplicate,#cfd3d7,This issue or pull request already exists"
+            "dependencies,#0366d6,Pull requests that update a dependency file"
+            "security,#ee0701,Security related issues"
+            "performance,#f9d0c4,Performance related issues"
+            "refactor,#c5def5,Code refactoring"
+            "test,#0e8a16,Adding or updating tests"
+            "ci,#ffccd7,Continuous integration"
+            "dependencies,#0366d6,Dependency updates"
+          )
+          
+          # 创建标签
+          for label in "${labels[@]}"; do
+            IFS=',' read -r name color description <<< "$label"
+            
+            # 检查标签是否已存在
+            if gh api repos/${{ github.repository }}/labels/$name >/dev/null 2>&1; then
+              echo "Label $name already exists, updating..."
+              gh api repos/${{ github.repository }}/labels/$name \
+                --method PATCH \
+                --field color="$color" \
+                --field description="$description"
+            else
+              echo "Creating label: $name"
+              gh api repos/${{ github.repository }}/labels \
+                --method POST \
+                --field name="$name" \
+                --field color="$color" \
+                --field description="$description"
+            fi
+          done
+
+  # 创建 Issue
+  create-issue:
+    name: Create Issue
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'create-issue'
+    steps:
+      - name: Setup GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Create issue
+        run: |
+          TITLE="${{ github.event.inputs.issue_title }}"
+          BODY="${{ github.event.inputs.issue_body }}"
+          
+          if [ -z "$TITLE" ]; then
+            TITLE="Automated issue created on $(date)"
+          fi
+          
+          if [ -z "$BODY" ]; then
+            BODY="This issue was automatically created by the repository automation workflow."
+          fi
+          
+          gh issue create \
+            --title "$TITLE" \
+            --body "$BODY" \
+            --label "automated"
+
+  # 创建发布
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'create-release'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Create tag and release
+        run: |
+          VERSION="${{ github.event.inputs.release_version }}"
+          if [ -z "$VERSION" ]; then
+            VERSION=$(date +%Y.%m.%d-%H%M%S)
+          fi
+          
+          # 创建标签
+          git tag "v$VERSION"
+          git push origin "v$VERSION"
+          
+          # 创建发布
+          gh release create "v$VERSION" \
+            --title "Release v$VERSION" \
+            --notes "Automated release created on $(date)" \
+            --generate-notes
+
+  # 清理旧的构建产物
+  cleanup-artifacts:
+    name: Cleanup Old Artifacts
+    runs-on: ubuntu-latest
+    if: github.event.inputs.action == 'cleanup-artifacts'
+    steps:
+      - name: Setup GitHub CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt update
+          sudo apt install gh -y
+
+      - name: Authenticate GitHub CLI
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+      - name: Cleanup old workflow runs
+        run: |
+          # 获取旧的 workflow runs
+          gh api repos/${{ github.repository }}/actions/runs \
+            --paginate \
+            --jq '.workflow_runs[] | select(.status == "completed") | .id' | \
+            tail -n +21 | \
+            while read run_id; do
+              echo "Deleting workflow run: $run_id"
+              gh api repos/${{ github.repository }}/actions/runs/$run_id \
+                --method DELETE || true
+            done
+
+      - name: Cleanup old artifacts
+        run: |
+          # 获取旧的 artifacts
+          gh api repos/${{ github.repository }}/actions/artifacts \
+            --paginate \
+            --jq '.artifacts[] | select(.expired == false) | .id' | \
+            tail -n +11 | \
+            while read artifact_id; do
+              echo "Deleting artifact: $artifact_id"
+              gh api repos/${{ github.repository }}/actions/artifacts/$artifact_id \
+                --method DELETE || true
+            done
+
+  # 状态报告
+  status:
+    name: Status Report
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [create-repo, setup-repo, sync-labels, create-issue, create-release, cleanup-artifacts]
+    steps:
+      - name: Generate status report
+        run: |
+          echo "## Automation Workflow Status" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Workflow: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Action: ${{ github.event.inputs.action }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Triggered by: ${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Repository: ${{ github.repository }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Timestamp: $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Job Status" >> $GITHUB_STEP_SUMMARY
+          echo "- create-repo: ${{ needs.create-repo.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- setup-repo: ${{ needs.setup-repo.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- sync-labels: ${{ needs.sync-labels.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- create-issue: ${{ needs.create-issue.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- create-release: ${{ needs.create-release.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- cleanup-artifacts: ${{ needs.cleanup-artifacts.result }}" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,297 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 1.0.0)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Is this a prerelease?'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  GO_VERSION: '1.21'
+  PROJECT_NAME: 'gwt'
+
+jobs:
+  # 运行测试和代码质量检查
+  test:
+    name: Test and Quality Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Cache Go modules
+        uses: actions/cache@v3
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: make test
+
+      - name: Run code quality checks
+        run: make check
+
+      - name: Upload coverage reports
+        uses: codecov/codecov-action@v3
+        with:
+          file: ./coverage/coverage.out
+          flags: unittests
+          name: codecov-umbrella
+
+  # 构建所有平台的二进制文件
+  build:
+    name: Build Release Binaries
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Get version info
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "PRERELEASE=${{ github.event.inputs.prerelease }}" >> $GITHUB_OUTPUT
+          else
+            # 从 git tag 获取版本
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "PRERELEASE=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # 获取构建信息
+          echo "BUILD_TIME=$(date -u '+%Y-%m-%d_%H:%M:%S')" >> $GITHUB_OUTPUT
+          echo "GIT_COMMIT=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "GIT_TAG=$(git describe --tags --always)" >> $GITHUB_OUTPUT
+
+      - name: Build binary
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          output_name=${{ env.PROJECT_NAME }}-${GOOS}-${GOARCH}
+          if [ "$GOOS" = "windows" ]; then
+            output_name="${output_name}.exe"
+          fi
+          
+          go build -ldflags "-s -w -X main.Version=${{ steps.version.outputs.VERSION }} -X main.BuildTime=${{ steps.version.outputs.BUILD_TIME }} -X main.GitCommit=${{ steps.version.outputs.GIT_COMMIT }}" \
+                   -trimpath \
+                   -o dist/${output_name} .
+
+      - name: Create archive
+        run: |
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip ${{ env.PROJECT_NAME }}-${{ steps.version.outputs.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}.zip ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+          else
+            tar -czf ${{ env.PROJECT_NAME }}-${{ steps.version.outputs.VERSION }}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz ${{ env.PROJECT_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}
+          fi
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.{zip,tar.gz}
+          retention-days: 1
+
+  # 创建 GitHub Release 并上传构建产物
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      packages: write
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version info
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "VERSION=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "PRERELEASE=${{ github.event.inputs.prerelease }}" >> $GITHUB_OUTPUT
+          else
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+            echo "PRERELEASE=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+        with:
+          path: artifacts
+
+      - name: Generate release notes
+        id: release_notes
+        run: |
+          # 生成发布说明
+          echo "## 🚀 What's New in v${{ steps.version.outputs.VERSION }}" > release_notes.md
+          echo "" >> release_notes.md
+          
+          # 获取最近的提交
+          echo "### 📋 Recent Changes" >> release_notes.md
+          git log --pretty=format:"- %s" $(git describe --tags --abbrev=0 HEAD~1)..HEAD >> release_notes.md
+          echo "" >> release_notes.md
+          
+          # 添加安装说明
+          echo "### 📦 Installation" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "#### Using install script:" >> release_notes.md
+          echo "\`\`\`bash" >> release_notes.md
+          echo "curl -fsSL https://raw.githubusercontent.com/tinsfox/gwt/main/scripts/install.sh | bash" >> release_notes.md
+          echo "\`\`\`" >> release_notes.md
+          echo "" >> release_notes.md
+          echo "#### Manual download:" >> release_notes.md
+          echo "Download the appropriate binary for your platform from the assets below." >> release_notes.md
+          echo "" >> release_notes.md
+          echo "#### Using go install:" >> release_notes.md
+          echo "\`\`\`bash" >> release_notes.md
+          echo "go install github.com/tinsfox/gwt@latest" >> release_notes.md
+          echo "\`\`\`" >> release_notes.md
+          echo "" >> release_notes.md
+          
+          # 添加校验和信息
+          echo "### 🔒 Checksums" >> release_notes.md
+          echo "See \`checksums.txt\` in the release assets for SHA256 checksums." >> release_notes.md
+          
+          # 设置输出
+          echo "RELEASE_NOTES<<EOF" >> $GITHUB_OUTPUT
+          cat release_notes.md >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && format('v{0}', github.event.inputs.version) || github.ref }}
+          release_name: Release v${{ steps.version.outputs.VERSION }}
+          body: ${{ steps.release_notes.outputs.RELEASE_NOTES }}
+          draft: false
+          prerelease: ${{ steps.version.outputs.PRERELEASE }}
+
+      - name: Upload Release Assets
+        run: |
+          # 收集所有构建产物
+          mkdir -p release_assets
+          find artifacts -name "*.zip" -o -name "*.tar.gz" | while read file; do
+            cp "$file" release_assets/
+          done
+          
+          # 生成校验和
+          cd release_assets
+          sha256sum * > checksums.txt
+          cd ..
+          
+          # 上传所有文件
+          for file in release_assets/*; do
+            filename=$(basename "$file")
+            echo "Uploading $filename..."
+            
+            # 检测 MIME 类型
+            if [[ "$filename" == *.txt ]]; then
+              mime_type="text/plain"
+            elif [[ "$filename" == *.zip ]]; then
+              mime_type="application/zip"
+            elif [[ "$filename" == *.tar.gz ]]; then
+              mime_type="application/gzip"
+            else
+              mime_type="application/octet-stream"
+            fi
+            
+            gh release upload "v${{ steps.version.outputs.VERSION }}" "$file" --clobber --repo ${{ github.repository }}
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 更新 Homebrew Formula（可选）
+  update-homebrew:
+    name: Update Homebrew Formula
+    needs: release
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Update Homebrew Formula
+        run: |
+          # 这里可以添加自动更新 Homebrew Formula 的逻辑
+          # 需要设置 HOMEBREW_GITHUB_API_TOKEN
+          echo "Homebrew formula update would happen here"
+          echo "This requires setting up a separate repository for the formula"
+
+  # 通知和后续处理
+  notify:
+    name: Post-release Notifications
+    needs: [release, update-homebrew]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Notify on success
+        if: needs.release.result == 'success'
+        run: |
+          echo "✅ Release v${{ needs.release.outputs.version }} completed successfully!"
+          echo "📦 Binaries are available at: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.release.outputs.version }}"
+          
+      - name: Notify on failure
+        if: needs.release.result == 'failure'
+        run: |
+          echo "❌ Release failed!"
+          echo "Please check the workflow logs for details."
+          
+      - name: Create summary
+        run: |
+          echo "## Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- Version: v${{ needs.release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Prerelease: ${{ needs.release.outputs.prerelease }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Build Time: ${{ needs.release.outputs.build_time }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Git Commit: ${{ needs.release.outputs.git_commit }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Release URL: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.release.outputs.version }}" >> $GITHUB_STEP_SUMMARY
