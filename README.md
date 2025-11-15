@@ -244,12 +244,6 @@ MIT License - 详见 [LICENSE](LICENSE) 文件。
 - [go-git](https://github.com/go-git/go-git) - Git 操作库
 - [color](https://github.com/fatih/color) - 终端颜色
 
-## 📞 支持
-
-- 💬 [GitHub Discussions](https://github.com/tinsfox/gwt/discussions)
-- 🐛 [Issue Tracker](https://github.com/tinsfox/gwt/issues)
-- 📧 邮件: your-email@example.com
-
 ---
 
 ⭐ 如果这个项目对你有帮助，请给个 Star！
