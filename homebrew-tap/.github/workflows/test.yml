@@ -1,0 +1,130 @@
+name: Test Homebrew Formula
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Test Formula
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-latest, macos-13]  # Intel and Apple Silicon
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Cache Homebrew packages
+        uses: actions/cache@v3
+        with:
+          path: |
+                ~/Library/Caches/Homebrew/gwt--*
+                ~/Library/Caches/Homebrew/downloads/*--gwt-*
+          key: ${{ runner.os }}-homebrew-gwt-${{ hashFiles('Formula/gwt.rb') }}
+          restore-keys: |
+            ${{ runner.os }}-homebrew-gwt-
+
+      - name: Install formula dependencies
+        run: |
+          brew install go
+
+      - name: Install formula
+        run: |
+          brew install --build-from-source ./Formula/gwt.rb
+
+      - name: Test formula installation
+        run: |
+          which gwt
+          gwt --version
+          gwt --help
+
+      - name: Test shell completions
+        run: |
+          # Test bash completion
+          if [ -f "$(brew --prefix)/etc/bash_completion.d/gwt" ]; then
+            echo "✅ Bash completion installed"
+          else
+            echo "❌ Bash completion not found"
+            exit 1
+          fi
+
+          # Test zsh completion
+          if [ -f "$(brew --prefix)/share/zsh/site-functions/_gwt" ]; then
+            echo "✅ Zsh completion installed"
+          else
+            echo "❌ Zsh completion not found"
+            exit 1
+          fi
+
+          # Test fish completion
+          if [ -f "$(brew --prefix)/share/fish/vendor_completions.d/gwt.fish" ]; then
+            echo "✅ Fish completion installed"
+          else
+            echo "❌ Fish completion not found"
+            exit 1
+          fi
+
+      - name: Run formula tests
+        run: |
+          brew test ./Formula/gwt.rb
+
+      - name: Check binary functionality
+        run: |
+          # Test basic functionality
+          gwt list || echo "List command test (expected to fail without git repo)"
+          
+          # Test in a git repository
+          git init test-repo
+          cd test-repo
+          gwt list
+          cd ..
+          rm -rf test-repo
+
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v3
+        with:
+          name: brew-test-results-${{ matrix.os }}
+          path: |
+            ~/Library/Logs/Homebrew/gwt/
+            /tmp/gwt-test-*/
+          retention-days: 7
+
+  lint:
+    name: Lint Formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@master
+
+      - name: Lint formula
+        run: |
+          brew style Formula/gwt.rb
+
+      - name: Check formula syntax
+        run: |
+          ruby -c Formula/gwt.rb
+
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Security scan
+        run: |
+          # Check for common security issues in the formula
+          grep -E "(system|exec|shell_output)" Formula/gwt.rb | head -5
+          echo "Security scan completed"

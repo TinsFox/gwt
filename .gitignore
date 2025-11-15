@@ -1,3 +1,6 @@
+# Git Worktree CLI - Enhanced .gitignore
+
+# === Go 相关 ===
 # Binaries for programs and plugins
 *.exe
 *.exe~
@@ -17,12 +20,19 @@
 # Go workspace file
 go.work
 
+# === 构建相关 ===
 # Build directories
 /build/
 /dist/
 /coverage/
 /tmp/
 
+# 构建产物（除了发布包中的）
+*.tar.gz
+*.zip
+checksums.txt
+
+# === IDE 相关 ===
 # IDE specific files
 .idea/
 .vscode/
@@ -30,42 +40,107 @@ go.work
 *.swo
 *~
 
-# OS specific files
-.DS_Store
-Thumbs.db
+# VS Code settings
+.vscode/settings.json
+.vscode/tasks.json
+.vscode/launch.json
+.vscode/extensions.json
 
-# Configuration files
+# IntelliJ IDEA
+*.iml
+.idea/
+.idea_modules/
+
+# === OS 相关 ===
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Linux
+.directory
+
+# === 配置相关 ===
+# 本地配置文件
 .gwt.yaml
 .gwt.json
-
-# Log files
-*.log
-
-# Temporary files
-*.tmp
-*.temp
-
-# Air live reload
-tmp/
-
-# Local environment files
 .env
 .env.local
+.env.*.local
 
-# Release artifacts
-*.tar.gz
-*.zip
-checksums.txt
+# === 日志相关 ===
+# 日志文件
+*.log
+*.log.*
+logs/
 
-# Test coverage
-coverage.html
-coverage.out
-*.cov
+# === 临时文件 ===
+# 临时文件
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+*.orig
 
-# Profiling
-*.prof
-*.pprof
-
-# Debug files
+# === 调试相关 ===
+# 调试文件
 debug
 debug.test
+*.prof
+*.pprof
+*.cov
+coverage.html
+coverage.out
+
+# === Air 热重载 ===
+# Air 临时文件
+tmp/
+.air.toml.tmp
+
+# === 发布相关 ===
+# 发布临时文件
+release/
+release-package/
+
+# === 本地开发相关 ===
+# 本地开发文件
+.local/
+.cache/
+
+# === 系统相关 ===
+# 系统文件
+Thumbs.db
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# === 安全相关 ===
+# 安全文件
+.env
+.env.local
+.env.*.local
+
+# === 其他 ===
+# 其他临时文件
+*.orig
+*.rej
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# === 特定工具相关 ===
+# 特定工具的配置文件
+.local/
+.cache/
+
+# === 发布产物（保留发布包中的） ===
+# 注意：release-package/ 中的文件应该被 git 跟踪
+# 只有构建过程中的临时文件应该被忽略
