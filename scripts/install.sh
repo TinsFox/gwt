@@ -16,7 +16,7 @@ RESET='\033[0m'
 # 项目信息
 PROJECT_NAME="gwt"
 GITHUB_REPO="tinsfox/gwt"
-VERSION="0.1.1"
+VERSION="0.1.2"
 INSTALL_DIR="/usr/local/bin"
 
 # 帮助信息

@@ -41,6 +41,8 @@ func SetVersionInfo(v, bt, gc string) {
 	version = v
 	buildTime = bt
 	gitCommit = gc
+	// Cobra snapshots Version at startup, so update it after ldflags injection.
+	rootCmd.Version = getVersion()
 }
 
 func getVersion() string {
