@@ -16,7 +16,7 @@ RESET='\033[0m'
 # 项目信息
 PROJECT_NAME="gwt"
 GITHUB_REPO="tinsfox/gwt"
-VERSION="latest"
+VERSION="0.1.1"
 INSTALL_DIR="/usr/local/bin"
 
 # 帮助信息
@@ -211,30 +211,53 @@ uninstall_program() {
     fi
 }
 
+# 尝试写入补全文件到第一个可写目录
+write_completion() {
+    local shell_name="$1"
+    local file_name="$2"
+    shift 2
+    local dirs=("$@")
+
+    for dir in "${dirs[@]}"; do
+        if mkdir -p "$dir" 2>/dev/null; then
+            if "$INSTALL_DIR/$PROJECT_NAME" completion "$shell_name" > "$dir/$file_name" 2>/dev/null; then
+                log_info "${shell_name} 补全已安装到 $dir/$file_name"
+                return 0
+            fi
+        fi
+    done
+
+    log_warning "未能安装 ${shell_name} 补全（无可写目录）"
+    return 1
+}
+
 # 配置 shell 补全
 setup_completion() {
     log_info "设置 shell 自动补全..."
-    
-    # 生成补全脚本
-    if [ -f "$INSTALL_DIR/$PROJECT_NAME" ]; then
-        # Bash
-        if [ -d "/etc/bash_completion.d" ]; then
-            "$INSTALL_DIR/$PROJECT_NAME" completion bash > "/etc/bash_completion.d/$PROJECT_NAME"
-            log_info "Bash 补全已安装"
-        fi
-        
-        # Zsh
-        if [ -d "/usr/local/share/zsh/site-functions" ]; then
-            "$INSTALL_DIR/$PROJECT_NAME" completion zsh > "/usr/local/share/zsh/site-functions/_$PROJECT_NAME"
-            log_info "Zsh 补全已安装"
-        fi
-        
-        # Fish
-        if [ -d "/usr/share/fish/vendor_completions.d" ]; then
-            "$INSTALL_DIR/$PROJECT_NAME" completion fish > "/usr/share/fish/vendor_completions.d/$PROJECT_NAME.fish"
-            log_info "Fish 补全已安装"
-        fi
-    fi
+
+    if [ ! -x "$INSTALL_DIR/$PROJECT_NAME" ]; then
+        log_warning "未找到可执行的 $PROJECT_NAME，跳过补全安装"
+        return
+    }
+
+    # Bash
+    write_completion "bash" "$PROJECT_NAME" \
+        "/etc/bash_completion.d" \
+        "/usr/local/etc/bash_completion.d" \
+        "$HOME/.local/share/bash-completion/completions" \
+        "$HOME/.config/bash-completion/completions"
+
+    # Zsh
+    write_completion "zsh" "_$PROJECT_NAME" \
+        "${HOMEBREW_PREFIX:-/opt/homebrew}/share/zsh/site-functions" \
+        "/usr/local/share/zsh/site-functions" \
+        "${ZDOTDIR:-$HOME}/.zsh/completions"
+
+    # Fish
+    write_completion "fish" "$PROJECT_NAME.fish" \
+        "/usr/share/fish/vendor_completions.d" \
+        "/usr/local/share/fish/vendor_completions.d" \
+        "$HOME/.config/fish/completions"
 }
 
 # 显示安装结果
