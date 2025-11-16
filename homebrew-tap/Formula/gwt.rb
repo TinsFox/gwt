@@ -1,9 +1,9 @@
 class Gwt < Formula
   desc "Git Worktree CLI - A powerful command-line tool for managing Git worktrees"
   homepage "https://github.com/TinsFox/gwt"
-  url "https://github.com/TinsFox/gwt/archive/refs/tags/v0.1.1.tar.gz"
-  sha256 "a98532ecfa6d80bc00996475e990489be479fe06c0612228a91e902cd61215b0"
-  version "0.1.1"
+  url "https://github.com/TinsFox/gwt/archive/refs/tags/v0.1.2.tar.gz"
+  sha256 "9fefc08b1c6255a8301580afdcbd08d4d1c74872a7f7831edf49c815552e0f3e"
+  version "0.1.2"
   license "MIT"
   head "https://github.com/TinsFox/gwt.git", branch: "main"
 
